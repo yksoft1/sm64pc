@@ -39,9 +39,6 @@
 *.idb
 *.pdb
 
-# datadump
-/tools/ddump/*
-
 # Text editor remnants
 *.swp
 .vscode/*
@@ -77,3 +74,9 @@ sm64config.txt
 !/sound/**/*custom*/**/*.aiff
 !/assets/**/*custom*.bin
 !/assets/**/*custom*/**/*.bin
+
+# Tools folder (It's related with building on Windows)
+tools/*
+
+# Some .plan files
+*.plan
