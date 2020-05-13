@@ -1,0 +1,44 @@
+[savedata]
+coinscoreages = "15555555"
+
+[flags]
+wing_cap = 1
+metal_cap = 0
+vanish_cap = 1
+key_1 = 1
+key_2 = 0
+
+[courses]
+bob = "100, 111111"
+wf =  "100, 111111"
+jrb = "100, 111111"
+ccm = "100, 111111"
+bbh = "100, 111111"
+hmc = "100, 111111"
+lll = "100, 111111"
+ssl = "100, 111111"
+ddd = "100, 111111"
+sl =  "100, 111111"
+wdw = "100, 111111"
+ttm = "100, 111111"
+thi = "100, 111111"
+ttc = "100, 111111"
+rr =  "100, 111111"
+
+[bonus]
+hub =   11111
+bitdw = 1
+bitfs = 1
+bits =  1
+pss =   11
+cotmc = 1
+totwc = 1
+vcutm = 1
+wmotr = 1
+sa =    1
+
+[cap]
+type = ground
+level = 10
+area = 1
+pos = 217 0 203

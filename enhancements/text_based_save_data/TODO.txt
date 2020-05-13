@@ -1,0 +1,14 @@
+write_eeprom_data calls:
+? restore_main_menu_data:     copies menu data from backup to slot
+? save_main_menu_data:        saves menu data (both slot and backup)
+? restore_save_file_data:     copies save data from backup to slot
+? save_file_do_save:          saves save data (fileIndex)
+
+read_eeprom_data call:
+? save_file_load_all:         load both sav and menu data
+
+So here's some prototype functions:
++ write_text_save_data(s32 id):     write save data to indexed file
+* read_text_save_data(s32 id):      read save data from indexed file
+* read_text_menu_data(char* path):  read menu data from config file
+* write_text_menu_data(char* path): write menu data from config file

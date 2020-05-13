@@ -11,6 +11,7 @@
 #include "level_table.h"
 #include "course_table.h"
 #include "thread6.h"
+#include "pc/ini.h"
 
 #define MENU_DATA_MAGIC 0x4849
 #define SAVE_FILE_MAGIC 0x4441
@@ -20,6 +21,10 @@ STATIC_ASSERT(sizeof(struct SaveBuffer) == EEPROM_SIZE, "eeprom buffer size must
 extern struct SaveBuffer gSaveBuffer;
 
 struct WarpCheckpoint gWarpCheckpoint;
+
+// Next four are text-based savedata related functions
+#define r_t_d_error(config_name) { fprintf(stderr, "There's been a problem loading " #config_name ".\n"); return -1; } // read_text_data's error function
+#define probe_read()             { memset(probe,0,sizeof(probe)); fscanf(fp, "%s\n", probe); }                        
 
 s8 gMainMenuDataModified;
 s8 gSaveFileModified;
@@ -31,6 +36,27 @@ u8 gGotFileCoinHiScore = 0;
 u8 gCurrCourseStarFlags = 0;
 
 u8 gSpecialTripleJump = 0;
+
+const char *sav_flags[NUM_FLAGS] = {
+    "file_exists", "wing_cap", "metal_cap", "vanish_cap", "key_1", "key_2",
+    "basement_door", "upstairs_door", "ddd_moved_back", "moat_drained",
+    "pps_door", "wf_door", "ccm_door", "jrb_door", "bitdw_door",
+    "bitfs_door", "", "", "", "", "50star_door"
+};
+
+const char *sav_courses[NUM_COURSES] = {
+    "bob", "wf", "jrb", "ccm", "bbh", "hmc", "lll",
+    "ssl", "ddd", "sl", "wdw", "ttm", "thi", "ttc", "rr"
+};
+
+const char *sav_bonus_courses[NUM_BONUS_COURSES] = {
+    "bitdw", "bitfs", "bits", "pss", "cotmc",
+    "totwc", "vcutm", "wmotr", "sa", "hub"
+};
+
+const char *cap_on_types[NUM_CAP_ON] = {
+    "ground", "klepto", "ukiki", "mrblizzard"
+};
 
 #define STUB_LEVEL(_0, _1, courseenum, _3, _4, _5, _6, _7, _8) courseenum,
 #define DEFINE_LEVEL(_0, _1, courseenum, _3, _4, _5, _6, _7, _8, _9, _10) courseenum,
@@ -76,6 +102,162 @@ static s32 read_eeprom_data(void *buffer, s32 size) {
     }
 
     return status;
+}
+
+/**
+ * Write data to a text-based save. Check .format in basedir to get some info on what is going on here.
+ * TODO: make save_file.sm64s be saved in the correct folder
+ * TODO: not sure if the u8s should be saved to the file with %c or %d.
+ * 
+ * Functions seemingly needed for loading:
+ * set_coin_score_age
+ * 
+ */
+// static s32 write_text_data(void)  
+// {   
+//     u8 i, j;
+//     FILE* fp = fopen("experimental_save_file.sm64s", "w");                       
+
+//     if (fp == NULL) {
+//         fprintf(stderr, "Couldn't get to open file.\n");
+//         return -1;  
+//     }
+            
+//     for (i=0; i < NUM_SAVE_FILES; i++)          // Save the data for every save file.
+//     {                                      
+//         struct SaveFile *save_file = &gSaveBuffer.files[i][0];
+//         fprintf(fp, "#saveno\n%d\n", i);
+//         fprintf(fp, "#language\n");
+        
+//         #ifdef VERSION_EU
+//         fprintf(fp, "%s\n", gSaveBuffer.menuData[0].language);
+//         #elif defined(VERSION_JP) || defined(VERSION_SH)
+//         fprintf(fp, "%s\n", "jp_JP");
+//         #else
+//         fprintf(fp, "%s\n", "en_US");
+//         #endif
+        
+//         fprintf(fp, "#caplevel\n%d\n", save_file->capLevel);
+//         fprintf(fp, "#caparea\n%d\n",  save_file->capArea);
+//         fprintf(fp, "#cappos\n");
+//         fprintf(fp, "%d %d %d\n", save_file->capPos[0], save_file->capPos[1], save_file->capPos[2]);
+//         fprintf(fp, "#flags\n%d\n", save_file->flags);
+//         fprintf(fp, "#coursestars\n");
+//         for (j=0; j<COURSE_COUNT-1; j++)
+//             fprintf(fp, "%d ", save_file->courseStars[j]);
+//         fprintf(fp, "%d\n", save_file->courseStars[j]);
+//         fprintf(fp, "#coursecoinscores\n");
+//         for (j=0; j<COURSE_STAGES_COUNT-1; j++)
+//             fprintf(fp, "%d ", save_file->courseCoinScores[j]);
+//         fprintf(fp, "%d\n", save_file->courseCoinScores[j]);
+//         fprintf(fp, "#soundmode\n%d\n", gSaveBuffer.menuData[0].soundMode);
+//         fprintf(fp, "#coinscoreages\n%d\n", gSaveBuffer.menuData[0].coinScoreAges[i]);
+//         fprintf(fp, "------------------\n");
+//         printf("i: %d, csa: %d\n", i, gSaveBuffer.menuData[0].coinScoreAges[i]);
+//     }
+//     fclose(fp);
+// }
+
+static u32 bin_to_int(u32 n)
+{
+    s32 dec = 0, i = 0, rem;
+    while (n != 0) {
+        rem = n % 10;
+        n /= 10;
+        dec += rem * (1 << i);
+        ++i;
+    }
+    return dec;
+}
+
+static s32 read_text_save(s32 fileIndex)  // TODO: add signature
+{
+    char *filename, *temp;
+    const char *value;
+    ini_t *savedata;
+    
+    u32 i, flag, coins, stars, starFlags;
+    u32 capLevel, capArea;
+    s32 capPos[3];
+    
+    /* Defining savefile's name */
+    filename = (char*)malloc(14 * sizeof(char));
+    if (sprintf(filename, "save_file_%d.sav", fileIndex) < 0)
+    {
+        return -1;
+    }
+
+    /* Try to open the file */
+    savedata = ini_load(filename);
+    if (savedata == NULL) {
+        return -1;
+    }
+    
+    /* Parsing flags */
+    for (i = 0; i < NUM_FLAGS; i++) {
+        value = ini_get(savedata, "flags", sav_flags[i]);
+        
+        if (value) {
+            flag = strtol(value, &temp, 10);
+            if (flag) {
+                flag = 1 << i;              /* Look flag defines in header.. */
+                save_file_set_flags(flag);
+            }
+        }
+    }
+
+    /* Parsing courses' data*/
+    for (i = 0; i < NUM_COURSES; i++) {
+        value = ini_get(savedata, "courses", sav_courses[i]);
+        if (value) {
+            sscanf(value, "%d, %d", &coins, &stars); 
+            starFlags = bin_to_int(stars);
+
+            gSaveBuffer.files[fileIndex][0].courseStars[i+1] |= starFlags;
+            gSaveBuffer.files[fileIndex][0].courseCoinScores[i+1] = coins;
+        }
+    }
+
+    for (i = 0; i < NUM_BONUS_COURSES; i++) {
+        value = ini_get(savedata, "bonus", sav_bonus_courses[i]);
+        if (value) {
+            sscanf(value, "%d", &stars);
+            starFlags = bin_to_int(stars);
+
+            if (strlen(value) == 5) {
+                /* Process Hub */
+                gSaveBuffer.files[fileIndex][0].courseStars[COURSE_NONE] |= starFlags;
+            }
+            else if (strlen(value) == 2) {
+                /* Process Princess's Secret Slide */
+                gSaveBuffer.files[fileIndex][0].courseStars[COURSE_PSS] |= starFlags;
+            }
+            else
+            {
+                /* Process another bonus shit */
+                gSaveBuffer.files[fileIndex][0].courseStars[i + 16] |= starFlags;
+            }
+        }
+    }
+
+    for (i = 0; i < NUM_CAP_ON; i++) {
+        value = ini_get(savedata, "cap", "type");
+        if (strcmp(value, cap_on_types[i]) == 0) {
+            flag = (1 << (16 + i));
+            save_file_set_flags(flag);
+            break;
+        }
+    }
+    sscanf(ini_get(savedata, "cap", "level"), "%d", &capLevel);
+    sscanf(ini_get(savedata, "cap", "area"), "%d", &capArea);
+    sscanf(ini_get(savedata, "cap", "pos"), "%d %d %d", &capPos[0], &capPos[1], &capPos[2]);
+
+    gSaveBuffer.files[fileIndex][0].capLevel = capLevel; 
+    gSaveBuffer.files[fileIndex][0].capArea = capArea; 
+    memcpy(&capPos, &gSaveBuffer.files[fileIndex][0].capPos, sizeof(capPos));
+
+    ini_free(savedata);
+    return 1;
 }
 
 /**
@@ -298,38 +480,44 @@ void save_file_load_all(void) {
     bzero(&gSaveBuffer, sizeof(gSaveBuffer));
     read_eeprom_data(&gSaveBuffer, sizeof(gSaveBuffer));
 
-    // Verify the main menu data and create a backup copy if only one of the slots is valid.
-    validSlots = verify_save_block_signature(&gSaveBuffer.menuData[0], sizeof(gSaveBuffer.menuData[0]), MENU_DATA_MAGIC);
-    validSlots |= verify_save_block_signature(&gSaveBuffer.menuData[1], sizeof(gSaveBuffer.menuData[1]),MENU_DATA_MAGIC) << 1;
-    switch (validSlots) {
-        case 0: // Neither copy is correct
-            wipe_main_menu_data();
-            break;
-        case 1: // Slot 0 is correct and slot 1 is incorrect
-            restore_main_menu_data(0);
-            break;
-        case 2: // Slot 1 is correct and slot 0 is incorrect
-            restore_main_menu_data(1);
-            break;
-    }
-
     for (file = 0; file < NUM_SAVE_FILES; file++) {
-        // Verify the save file and create a backup copy if only one of the slots is valid.
-        validSlots = verify_save_block_signature(&gSaveBuffer.files[file][0], sizeof(gSaveBuffer.files[file][0]), SAVE_FILE_MAGIC);
-        validSlots |= verify_save_block_signature(&gSaveBuffer.files[file][1], sizeof(gSaveBuffer.files[file][1]), SAVE_FILE_MAGIC) << 1;
-        switch (validSlots) {
-            case 0: // Neither copy is correct
-                save_file_erase(file);
-                break;
-            case 1: // Slot 0 is correct and slot 1 is incorrect
-                restore_save_file_data(file, 0);
-                break;
-            case 2: // Slot 1 is correct and slot 0 is incorrect
-                restore_save_file_data(file, 1);
-                break;
-        }
+        read_text_save(file);
     }
+    
+    /* Not: checking signatures must be leaved for binary format! */
 
+    // // Verify the main menu data and create a backup copy if only one of the slots is valid.
+    // validSlots = verify_save_block_signature(&gSaveBuffer.menuData[0], sizeof(gSaveBuffer.menuData[0]), MENU_DATA_MAGIC);
+    // validSlots |= verify_save_block_signature(&gSaveBuffer.menuData[1], sizeof(gSaveBuffer.menuData[1]),MENU_DATA_MAGIC) << 1;
+    // switch (validSlots) {
+    //     case 0: // Neither copy is correct
+    //         wipe_main_menu_data();
+    //         break;
+    //     case 1: // Slot 0 is correct and slot 1 is incorrect
+    //         restore_main_menu_data(0);
+    //         break;
+    //     case 2: // Slot 1 is correct and slot 0 is incorrect
+    //         restore_main_menu_data(1);
+    //         break;
+    // }
+
+    // for (file = 0; file < NUM_SAVE_FILES; file++) {
+    //     // Verify the save file and create a backup copy if only one of the slots is valid.
+    //     validSlots = verify_save_block_signature(&gSaveBuffer.files[file][0], sizeof(gSaveBuffer.files[file][0]), SAVE_FILE_MAGIC);
+    //     validSlots |= verify_save_block_signature(&gSaveBuffer.files[file][1], sizeof(gSaveBuffer.files[file][1]), SAVE_FILE_MAGIC) << 1;
+    //     switch (validSlots) {
+    //         case 0: // Neither copy is correct
+    //             save_file_erase(file);
+    //             break;
+    //         case 1: // Slot 0 is correct and slot 1 is incorrect
+    //             restore_save_file_data(file, 0);               
+    //             break;
+    //         case 2: // Slot 1 is correct and slot 0 is incorrect
+    //             restore_save_file_data(file, 1);
+    //             break;
+    //     }
+    // }
+    
     stub_save_file_1();
 }
 
