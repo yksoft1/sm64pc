@@ -160,6 +160,7 @@ void eu_set_language(u16 language);
 u16 eu_get_language(void);
 #endif
 
+// Text-based savefile consts 
 #define NUM_COURSES 15
 #define NUM_BONUS_COURSES 10
 #define NUM_FLAGS 21
