@@ -1,4 +1,6 @@
 #include <ultra64.h>
+#include <time.h>
+#include <stdio.h>
 
 #include "sm64.h"
 #include "game_init.h"
@@ -33,6 +35,9 @@ u8 gCurrCourseStarFlags = 0;
 
 u8 gSpecialTripleJump = 0;
 
+// For debugging only!
+s8 gTextSaveFileFormat = TRUE;
+
 /* Flag key */
 const char *sav_flags[NUM_FLAGS] = {
     "file_exists", "wing_cap", "metal_cap", "vanish_cap", "key_1", "key_2",
@@ -49,8 +54,8 @@ const char *sav_courses[NUM_COURSES] = {
 
 /* Bonus courses keys (including Castle Course) */
 const char *sav_bonus_courses[NUM_BONUS_COURSES] = {
-    "bitdw", "bitfs", "bits", "pss", "cotmc",
-    "totwc", "vcutm", "wmotr", "sa", "hub"
+    "hub", "bitdw", "bitfs", "bits", "pss", "cotmc",
+    "totwc", "vcutm", "wmotr", "sa",
 };
 
 /* Mario's cap type keys */
@@ -104,6 +109,17 @@ static s32 read_eeprom_data(void *buffer, s32 size) {
     return status;
 }
 
+static void get_timestamp(char* buffer)
+{
+    time_t timer;
+    struct tm* tm_info;
+
+    timer = time(NULL);
+    tm_info = localtime(&timer);
+
+    strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
+}
+
 static u32 bin_to_int(u32 n)
 {
     s32 dec = 0, i = 0, rem;
@@ -116,10 +132,20 @@ static u32 bin_to_int(u32 n)
     return dec;
 }
 
+static u32 int_to_bin(u32 n)
+{
+    s32 bin = 0, rem, i = 1;
+    while (n != 0) {
+        rem = n % 2;
+        n /= 2;
+        bin += rem * i;
+        i *= 10;
+    }
+    return bin;
+}
+
 /**
- * Read data to a text-based save.
- * It uses functions from rxi's ini parser library.
- * TODO: parsing coin_score_age field
+ * Read gSaveBuffer data from a text-based savefile.
  */
 static s32 read_text_save(s32 fileIndex)
 {
@@ -129,7 +155,7 @@ static s32 read_text_save(s32 fileIndex)
     
     u32 i, flag, coins, stars, starFlags;
     u32 capLevel, capArea;
-    s32 capPos[3];
+    Vec3s capPos;
     
     /* Define savefile's name */
     filename = (char*)malloc(14 * sizeof(char));
@@ -143,16 +169,21 @@ static s32 read_text_save(s32 fileIndex)
     if (savedata == NULL) {
         return -1;
     }
+    else {
+        /* Good, file exists for gSaveBuffer */
+        gSaveBuffer.files[fileIndex][0].flags |= SAVE_FLAG_FILE_EXISTS;
+    }
+    
     
     /* Parse main flags */
-    for (i = 0; i < NUM_FLAGS; i++) {
+    for (i = 1; i < NUM_FLAGS; i++) {
         value = ini_get(savedata, "flags", sav_flags[i]);
         
         if (value) {
             flag = strtol(value, &temp, 10);
             if (flag) {
                 flag = 1 << i;  /* Look #define in header.. */
-                save_file_set_flags(flag);
+                gSaveBuffer.files[fileIndex][0].flags |= flag;
             }
         }
     }
@@ -162,10 +193,10 @@ static s32 read_text_save(s32 fileIndex)
         value = ini_get(savedata, "courses", sav_courses[i]);
         if (value) {
             sscanf(value, "%d, %d", &coins, &stars); 
-            starFlags = bin_to_int(stars);  /* 0b111111 -> 63 */
+            starFlags = bin_to_int(stars);  /* 111111 -> 63 */
 
-            gSaveBuffer.files[fileIndex][0].courseStars[i+1] |= starFlags;
-            gSaveBuffer.files[fileIndex][0].courseCoinScores[i+1] = coins;
+            save_file_set_star_flags(fileIndex, i, starFlags);
+            gSaveBuffer.files[fileIndex][0].courseCoinScores[i] = coins;
         }
     }
 
@@ -177,41 +208,133 @@ static s32 read_text_save(s32 fileIndex)
             starFlags = bin_to_int(stars);
 
             if (strlen(value) == 5) {
-                /* Process Castle Course (a.k.a None) */
-                gSaveBuffer.files[fileIndex][0].courseStars[COURSE_NONE] |= starFlags;
+                /* Process Castle Grounds */
+                save_file_set_star_flags(fileIndex, -1, starFlags);
             }
             else if (strlen(value) == 2) {
                 /* Process Princess's Secret Slide */
-                gSaveBuffer.files[fileIndex][0].courseStars[COURSE_PSS] |= starFlags;
+                save_file_set_star_flags(fileIndex, COURSE_PSS, starFlags);
             }
             else {
                 /* Process another shitty bonus course */
-                gSaveBuffer.files[fileIndex][0].courseStars[i + 16] |= starFlags;
+                save_file_set_star_flags(fileIndex, i+15, starFlags);
             }
         }
     }
 
-    /* Parse lost Mario's cap type... */
+    /* Find, who steal Mario's cap ... */
     for (i = 0; i < NUM_CAP_ON; i++) {
         value = ini_get(savedata, "cap", "type");
-        if (strcmp(value, cap_on_types[i]) == 0) {
-            flag = (1 << (16 + i));
-            save_file_set_flags(flag);
-            break;
+        if (value) {
+            if (!strcmp(value, cap_on_types[i])) {
+                flag = (1 << (16 + i));
+                gSaveBuffer.files[fileIndex][0].flags |= flag;
+                break;
+            }
         }
     }
     
     /* ... also it's position, area and level */
     sscanf(ini_get(savedata, "cap", "level"), "%d", &capLevel);
     sscanf(ini_get(savedata, "cap", "area"), "%d", &capArea);
-    sscanf(ini_get(savedata, "cap", "pos"), "%d %d %d", &capPos[0], &capPos[1], &capPos[2]);
+    /* sscanf(ini_get(savedata, "cap", "pos"), "%u %u %u", &capPos[0], &capPos[1], &capPos[2]); */
     
     gSaveBuffer.files[fileIndex][0].capLevel = capLevel; 
     gSaveBuffer.files[fileIndex][0].capArea = capArea; 
-    memcpy(&capPos, &gSaveBuffer.files[fileIndex][0].capPos, sizeof(capPos));
+    /* memcpy(&capPos, &gSaveBuffer.files[fileIndex][0].capPos, sizeof(capPos)); */
 
     /* Cleaning up after ourselves */
     ini_free(savedata);
+    return 1;
+}
+
+/**
+ * Write gSaveBuffer data to a text-based savefile.
+ */
+static s32 write_text_save(s32 fileIndex) 
+{
+    FILE* file;
+    char *filename, *value;
+    struct SaveFile *savedata;
+    
+    u32 i, flags, coins, stars, starFlags;
+    
+    /* Define savefile's name */
+    filename = (char*)malloc(14 * sizeof(char));
+    if (sprintf(filename, "save_file_%d.sav", fileIndex) < 0)
+    {
+        return -1;
+    }
+
+    file = fopen(filename, "wt");
+    if (file == NULL) {
+        return -1;
+    }
+
+    /* Write header */
+    fprintf(file, "# Super Mario 64 save file\n");
+    fprintf(file, "# Comment starts with #\n");
+    fprintf(file, "# True = 1, False = 0\n");
+
+    /* Write current timestamp */
+    value = (char*)malloc(26 * sizeof(char));
+    get_timestamp(value);
+    fprintf(file, "# %s\n", value);
+    
+    /* Write all flags */
+    fprintf(file, "\n[flags]\n");
+    for (i = 1; i < NUM_FLAGS; i++) {
+        if (strcmp(sav_flags[i], "")) {
+            flags = save_file_get_flags();
+            flags = (flags & (1 << i));      /* Get a specific bit */
+            flags = (flags) ? 1 : 0;         /* Determine if bit is set or not */
+
+            fprintf(file, "%s = %d\n", sav_flags[i], flags);
+        }
+    }
+
+    /* Write coin count and star flags from each course (except Castle Grounds) */
+    fprintf(file, "\n[courses]\n");
+    for (i = 0; i < NUM_COURSES; i++) {
+        stars = save_file_get_star_flags(fileIndex, i);
+        coins = save_file_get_course_coin_score(fileIndex, i);
+        starFlags = int_to_bin(stars);          /* 63 -> 111111 */
+            
+        fprintf(file, "%s = \"%d, %06d\"\n", sav_courses[i], coins, starFlags);
+    }
+
+    /* Write star flags from each bonus cource (including Castle Grounds) */
+    fprintf(file, "\n[bonus]\n");
+    for (i = 0; i < NUM_BONUS_COURSES; i++) {
+        if (i == 0) {
+            stars = save_file_get_star_flags(fileIndex, -1);
+        } else {
+            stars = save_file_get_star_flags(fileIndex, i+15);
+        }
+        starFlags = int_to_bin(stars);
+
+        fprintf(file, "%s = %d\n", sav_bonus_courses[i], starFlags);
+    }
+
+    /* Write who steal Mario's cap */
+    fprintf(file, "\n[cap]\n");
+    for (i = 0; i < NUM_CAP_ON; i++) {
+        flags = save_file_get_flags();      // Read all flags
+        flags = (flags & (1 << (i+16)));    // Get `cap` flags
+        flags = (flags) ? 1 : 0;            // Determine if bit is set or not
+        if (flags) {
+            fprintf(file, "type = %s\n", cap_on_types[i]);
+            break;
+        }
+    }
+
+    /* Write in what course and area Mario losted its cap, and cap's position */
+    savedata = &gSaveBuffer.files[fileIndex][0];
+    fprintf(file, "level = %d\n", savedata->capLevel);
+    fprintf(file, "area = %d\n", savedata->capArea);
+    /* fprintf(file, "pos = %u %u %u\n", savedata->capPos[0], savedata->capPos[1], savedata->capPos[2]); */
+
+    fclose(file);
     return 1;
 }
 
@@ -388,17 +511,24 @@ static void restore_save_file_data(s32 fileIndex, s32 srcSlot) {
 
 void save_file_do_save(s32 fileIndex) {
     if (gSaveFileModified) {
-        // Compute checksum
-        add_save_block_signature(&gSaveBuffer.files[fileIndex][0],
+
+        if (gTextSaveFileFormat == TRUE) {
+            write_text_save(fileIndex);
+        } 
+        else
+        {
+            // Compute checksum
+            add_save_block_signature(&gSaveBuffer.files[fileIndex][0],
                                  sizeof(gSaveBuffer.files[fileIndex][0]), SAVE_FILE_MAGIC);
 
-        // Copy to backup slot
-        bcopy(&gSaveBuffer.files[fileIndex][0], &gSaveBuffer.files[fileIndex][1],
-              sizeof(gSaveBuffer.files[fileIndex][1]));
+            // Copy to backup slot
+            bcopy(&gSaveBuffer.files[fileIndex][0], &gSaveBuffer.files[fileIndex][1],
+                                sizeof(gSaveBuffer.files[fileIndex][1]));
 
-        // Write to EEPROM
-        write_eeprom_data(gSaveBuffer.files[fileIndex], sizeof(gSaveBuffer.files[fileIndex]));
-
+            // Write to EEPROM
+            write_eeprom_data(gSaveBuffer.files[fileIndex], sizeof(gSaveBuffer.files[fileIndex]));
+        }
+        
         gSaveFileModified = FALSE;
     }
 
@@ -428,53 +558,55 @@ BAD_RETURN(s32) save_file_copy(s32 srcFileIndex, s32 destFileIndex) {
 void save_file_load_all(void) {
     s32 file;
     s32 validSlots;
+    s32 code;
 
     gMainMenuDataModified = FALSE;
     gSaveFileModified = FALSE;
 
     bzero(&gSaveBuffer, sizeof(gSaveBuffer));
-    read_eeprom_data(&gSaveBuffer, sizeof(gSaveBuffer));
-
-    // Read all 4 text-based savefiles
-    for (file = 0; file < NUM_SAVE_FILES; file++) {
-        read_text_save(file);
-    }
     
-    /* Note: checking signatures must be leaved for binary format!
-    `* Next commented lines is for binary parsing!
-     */
+    if (gTextSaveFileFormat == TRUE) {
+        // Read all 4 text-based savefiles
+        for (file = 0; file < NUM_SAVE_FILES; file++) {
+            code = read_text_save(file);
+        }
+    }
+    else
+    {
+        read_eeprom_data(&gSaveBuffer, sizeof(gSaveBuffer));
+        
+        // Verify the main menu data and create a backup copy if only one of the slots is valid.
+        validSlots = verify_save_block_signature(&gSaveBuffer.menuData[0], sizeof(gSaveBuffer.menuData[0]), MENU_DATA_MAGIC);
+        validSlots |= verify_save_block_signature(&gSaveBuffer.menuData[1], sizeof(gSaveBuffer.menuData[1]),MENU_DATA_MAGIC) << 1;
+        switch (validSlots) {
+            case 0: // Neither copy is correct
+                wipe_main_menu_data();
+                break;
+            case 1: // Slot 0 is correct and slot 1 is incorrect
+                restore_main_menu_data(0);
+                break;
+            case 2: // Slot 1 is correct and slot 0 is incorrect
+                restore_main_menu_data(1);
+                break;
+        }
 
-    // // Verify the main menu data and create a backup copy if only one of the slots is valid.
-    // validSlots = verify_save_block_signature(&gSaveBuffer.menuData[0], sizeof(gSaveBuffer.menuData[0]), MENU_DATA_MAGIC);
-    // validSlots |= verify_save_block_signature(&gSaveBuffer.menuData[1], sizeof(gSaveBuffer.menuData[1]),MENU_DATA_MAGIC) << 1;
-    // switch (validSlots) {
-    //     case 0: // Neither copy is correct
-    //         wipe_main_menu_data();
-    //         break;
-    //     case 1: // Slot 0 is correct and slot 1 is incorrect
-    //         restore_main_menu_data(0);
-    //         break;
-    //     case 2: // Slot 1 is correct and slot 0 is incorrect
-    //         restore_main_menu_data(1);
-    //         break;
-    // }
-
-    // for (file = 0; file < NUM_SAVE_FILES; file++) {
-    //     // Verify the save file and create a backup copy if only one of the slots is valid.
-    //     validSlots = verify_save_block_signature(&gSaveBuffer.files[file][0], sizeof(gSaveBuffer.files[file][0]), SAVE_FILE_MAGIC);
-    //     validSlots |= verify_save_block_signature(&gSaveBuffer.files[file][1], sizeof(gSaveBuffer.files[file][1]), SAVE_FILE_MAGIC) << 1;
-    //     switch (validSlots) {
-    //         case 0: // Neither copy is correct
-    //             save_file_erase(file);
-    //             break;
-    //         case 1: // Slot 0 is correct and slot 1 is incorrect
-    //             restore_save_file_data(file, 0);               
-    //             break;
-    //         case 2: // Slot 1 is correct and slot 0 is incorrect
-    //             restore_save_file_data(file, 1);
-    //             break;
-    //     }
-    // }
+        for (file = 0; file < NUM_SAVE_FILES; file++) {
+            // Verify the save file and create a backup copy if only one of the slots is valid.
+            validSlots = verify_save_block_signature(&gSaveBuffer.files[file][0], sizeof(gSaveBuffer.files[file][0]), SAVE_FILE_MAGIC);
+            validSlots |= verify_save_block_signature(&gSaveBuffer.files[file][1], sizeof(gSaveBuffer.files[file][1]), SAVE_FILE_MAGIC) << 1;
+            switch (validSlots) {
+                case 0: // Neither copy is correct
+                    save_file_erase(file);
+                    break;
+                case 1: // Slot 0 is correct and slot 1 is incorrect
+                    restore_save_file_data(file, 0);               
+                    break;
+                case 2: // Slot 1 is correct and slot 0 is incorrect
+                    restore_save_file_data(file, 1);
+                    break;
+            }
+        }
+    }
     
     stub_save_file_1();
 }

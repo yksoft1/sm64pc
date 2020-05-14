@@ -78,5 +78,5 @@ sm64config.txt
 # Tools folder (It's related with building on Windows)
 tools/*
 
-# Some .plan files
-*.plan
+# New text-based savefiles
+*.sav

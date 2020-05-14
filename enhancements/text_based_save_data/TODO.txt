@@ -14,6 +14,6 @@ read_eeprom_data call:
 
 So here's some prototype functions:
 + write_text_save_data(s32 id):     write save data to indexed file
-$ read_text_save_data(s32 id):      read save data from indexed file
++ read_text_save_data(s32 id):      read save data from indexed file
 $ read_text_menu_data(char* path):  read menu data from config file
 $ write_text_menu_data(char* path): write menu data from config file

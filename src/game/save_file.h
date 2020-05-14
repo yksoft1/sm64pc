@@ -166,4 +166,7 @@ u16 eu_get_language(void);
 #define NUM_FLAGS 21
 #define NUM_CAP_ON 4
 
+// Global value for using only text-based saves
+extern s8 gTextSaveFileFormat;
+
 #endif
