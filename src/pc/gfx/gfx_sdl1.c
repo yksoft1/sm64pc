@@ -20,6 +20,9 @@
 
 #include "src/pc/controller/controller_keyboard.h"
 
+int mouse_x;
+int mouse_y;
+
 // TODO: figure out if this shit even works
 #ifdef VERSION_EU
 # define FRAMERATE 25
